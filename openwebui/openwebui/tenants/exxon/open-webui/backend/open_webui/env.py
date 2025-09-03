@@ -116,8 +116,8 @@ if WEBUI_NAME != "Open WebUI":
     WEBUI_NAME += " (Open WebUI)"
 '''
 
-# Tenant - Scepter
-WEBUI_NAME = "Sceptey"
+# Tenant - ExxonMobil
+WEBUI_NAME = "ExxonMobilAI"
 
 WEBUI_FAVICON_URL = "https://openwebui.com/favicon.png"
 
