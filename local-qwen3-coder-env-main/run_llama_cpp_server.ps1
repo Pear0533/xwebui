@@ -49,19 +49,20 @@ $Args = @(
     '--model',             $ModelFile,
     '--port',              '10000',
     '--no-webui',
-    '--threads',           '16',                # Use all available threads for CPU
+    '--threads',           $Threads,
     '-fa',                 'on',
-    '-c',                  '65536',             # Lower context length for better memory usage
-    '-b', '4096',          # Batch size, adjust if memory allows
-    '-ub',                 '1024',              # Unprocessed batch size
-    '-ctk',                'q4_1',              # Use lower precision for faster inference
-    '-ctv',                'q4_1',              # Matching precision for efficiency
-    '-ot',                 'blk.(0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19).ffn.*exps=CUDA0',  # Use GPU
-    '-ngl',                '999',               # Keep this as is for stability
-    '--temp',              '0.6',               # Control output randomness
-    '--top-p',             '0.95',              # Top-p sampling
-    '--top-k',             '20',                # Top-k sampling
-    '--presence-penalty',  '1.5'                # Discourage repetition
+    '-c',                  '65536',
+    '-b', '4096',
+    '-ub',                '1024', 
+    '-ctk',                'q8_0',
+    '-ctv',                'q4_0',
+       '-ot',      'blk.(0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19).ffn.*exps=CUDA0',
+    '-ot',      'exps=CPU',
+    '-ngl',                '999',
+    '--temp',              '0.6',
+    '--top-p',             '0.95',
+    '--top-k',             '20',
+    '--presence-penalty',  '1.5'
 )
 
 Write-Host "→ Starting llama-server on http://localhost:8080 ..."
