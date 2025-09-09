@@ -1,11 +1,4 @@
-﻿<#  run-qwen3-server.ps1  PowerShell 5/7
-    ----------------------------------------------------------
-    • Stores GGUF under .\models\ next to this script
-    • Resumable download via BITS, fallback = Invoke-WebRequest
-    • Launches llama-server.exe from llama.cpp with Qwen-3 Coder + speculative decoding
-#>
-
-param([int]$Threads = 8)
+﻿param([int]$Threads = 8)
 
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $ServerExe  = Join-Path $ScriptRoot 'vendor\llama.cpp\build\bin\llama-server.exe'
@@ -16,7 +9,7 @@ if (-not (Test-Path $ServerExe)) {
 
 $ModelDir       = Join-Path $ScriptRoot 'models'
 # Main 30B model
-$ModelUrl       = 'https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-1M-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-1M-IQ4_NL.gguf'
+$ModelUrl       = 'https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf'
 $ModelFile      = Join-Path $ModelDir (Split-Path $ModelUrl -Leaf)
 # Draft 0.6B model
 # $DraftModelUrl  = 'https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf'
@@ -47,11 +40,11 @@ $Env:LLAMA_SET_ROWS = '1'
 $Args = @(
     '--jinja',
     '--model',             $ModelFile,
-    '--port',              '10000',
+    '--port',              '10001',
     '--no-webui',
     '--threads',           $Threads,
     '-fa',                 'on',
-    '-c',                  '65536',
+    '-c',                  '32768',
     '-b', '4096',
     '-ub',                '1024', 
     '-ctk',                'q8_0',
