@@ -6,13 +6,22 @@
     • Works on Windows PowerShell 5 and PowerShell 7
     • Uses the Ninja generator (fast, no VS-integration dependency)
     • Re-usable: just run the script; it installs only what is missing
-    • Pass -CudaArch <SM> to target a different GPU
-      (defaults to 89 = Ada; GTX-1070 = 61, RTX-30-series = 86, etc.)
+    • Must specify -CudaArch <SM> to target your GPU
+        CUDA Architecture (-CudaArch)
+        To get the best performance, match the -CudaArch parameter to your GPU generation during installation.
+
+        Architecture    Cards (examples)         Flag
+        Pascal          GTX 10×0, Quadro P       60 / 61 / 62
+        Turing          RTX 20×0 / 16×0          75
+        Ampere          RTX 30×0                 80 / 86 / 87
+        Ada             RTX 40×0                 89
+        Blackwell       RTX 50×0                 90
 #>
 
 [CmdletBinding()]
 param(
-    [int]   $CudaArch = 89,
+    [Parameter(Mandatory=$true)]
+    [int]   $CudaArch,
     [switch]$SkipBuild
 )
 
