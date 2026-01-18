@@ -1,0 +1,15 @@
+use_default_settings: true
+
+general:
+  instance_name: "Local SearXNG"
+
+server:
+  secret_key: "d87254ec62cac1a41ee4658b33764fe32f73b7bfe03e512791b5ed66566a33f2"
+  bind_address: "0.0.0.0"
+  port: 8888
+  limiter: false
+
+search:
+  formats:
+    - html
+    - json
