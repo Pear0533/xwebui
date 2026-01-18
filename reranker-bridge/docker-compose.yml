@@ -1,0 +1,10 @@
+services:
+  rerank-bridge:
+    image: ghcr.io/beaudamore/openwebui-ollama-reranker-bridge:latest
+    container_name: rerank-bridge
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - OLLAMA_BASE_URL=http://localhost:11434
+      - RERANK_MODE=embeddings
+      - RERANK_PORT=5600
