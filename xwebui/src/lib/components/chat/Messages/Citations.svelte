@@ -56,6 +56,23 @@
 				return acc;
 			}
 
+			    // Normalize helper
+    const toLower = (val) =>
+      typeof val === 'string' ? val.toLowerCase() : '';
+
+    // **Filter out tool citations (case-insensitive)**
+    const sourceType = toLower(source?.source?.type ?? source?.type);
+    const sourceName = toLower(source?.source?.name);
+    const sourceId   = toLower(source?.source?.id);
+
+    if (
+      sourceType === 'tool' ||
+      sourceName.startsWith('tool:') ||
+      sourceId.startsWith('tool:')
+    ) {
+      return acc; // Skip tool sources
+    }
+
 			source?.document?.forEach((document, index) => {
 				const metadata = source?.metadata?.[index];
 				const distance = source?.distances?.[index];

@@ -17,12 +17,24 @@
 	let history = [];
 	let status = null;
 
-	$: if (history && history.length > 0) {
-		status = history.at(-1);
+	// Filter out early web search statuses until a query is actually generated
+	$: if (JSON.stringify(statusHistory) !== JSON.stringify(history)) {
+		// Check if a query has been generated (indicated by having URLs/items or explicit query)
+		const hasGeneratedQuery = statusHistory.some(s => 
+			s?.action === 'web_search' && (s?.urls || s?.items || s?.query)
+		);
+
+		if (!hasGeneratedQuery) {
+			// Filter out web_search statuses until a query is generated
+			history = statusHistory.filter(s => s?.action !== 'web_search');
+		} else {
+			// Once a query is generated, show all statuses
+			history = statusHistory;
+		}
 	}
 
-	$: if (JSON.stringify(statusHistory) !== JSON.stringify(history)) {
-		history = statusHistory;
+	$: if (history && history.length > 0) {
+		status = history.at(-1);
 	}
 </script>
 

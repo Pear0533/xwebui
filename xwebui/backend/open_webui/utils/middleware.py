@@ -369,7 +369,6 @@ async def chat_memory_handler(
 
     return form_data
 
-
 async def chat_web_search_handler(
     request: Request, form_data: dict, extra_params: dict, user
 ):
@@ -389,45 +388,78 @@ async def chat_web_search_handler(
     user_message = get_last_user_message(messages)
 
     queries = []
-    try:
-        res = await generate_queries(
-            request,
-            {
-                "model": form_data["model"],
-                "messages": messages,
-                "prompt": user_message,
-                "type": "web_search",
-            },
-            user,
-        )
-
-        response = res["choices"][0]["message"]["content"]
-
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
         try:
-            bracket_start = response.find("{")
-            bracket_end = response.rfind("}") + 1
+            res = await generate_queries(
+                request,
+                {
+                    "model": form_data["model"],
+                    "messages": messages,
+                    "prompt": user_message,
+                    "type": "web_search",
+                },
+                user,
+            )
 
-            if bracket_start == -1 or bracket_end == -1:
-                raise Exception("No JSON object found in the response")
+            response = res["choices"][0]["message"]["content"]
 
-            response = response[bracket_start:bracket_end]
-            queries = json.loads(response)
-            queries = queries.get("queries", [])
+            try:
+                bracket_start = response.find("{")
+                bracket_end = response.rfind("}") + 1
+
+                if bracket_start == -1 or bracket_end == -1:
+                    raise Exception("No JSON object found in the response")
+
+                response = response[bracket_start:bracket_end]
+                queries = json.loads(response)
+                queries = queries.get("queries", [])
+                
+                # ? REJECT malformed queries
+                valid_queries = []
+                for q in queries:
+                    if isinstance(q, str):
+                        q_stripped = q.strip()
+                        # Reject if it looks like JSON, contains "queries", or is a URL
+                        if (q_stripped.startswith(('{', '[')) or 
+                            '"queries"' in q_stripped or 
+                            "'queries'" in q_stripped or
+                            q_stripped.startswith(('http://', 'https://'))):
+                            log.warning(f"Rejecting malformed/URL query: {q_stripped[:100]}")
+                            continue
+                        if q_stripped:
+                            valid_queries.append(q_stripped)
+                
+                queries = valid_queries
+                
+                # If we have valid queries, break out of retry loop
+                if queries:
+                    break
+                else:
+                    log.warning(f"All queries rejected or empty, retrying... (attempt {retry_count + 1}/{max_retries})")
+                    retry_count += 1
+                    
+            except Exception as e:
+                log.warning(f"Failed to parse queries from response: {e}, retrying... (attempt {retry_count + 1}/{max_retries})")
+                retry_count += 1
+
+            if ENABLE_QUERIES_CACHE:
+                request.state.cached_queries = queries
+
         except Exception as e:
-            queries = [response]
-
-        if ENABLE_QUERIES_CACHE:
-            request.state.cached_queries = queries
-
-    except Exception as e:
-        log.exception(e)
-        queries = [user_message]
+            log.exception(e)
+            retry_count += 1
+    
+    # After all retries, if still no valid queries, return empty array
+    # No fallback to user_message
 
     # Check if generated queries are empty
     if len(queries) == 1 and queries[0].strip() == "":
-        queries = [user_message]
+        queries = []
 
-    # Check if queries are not found
+    # Check if queries are not found (empty array from rejected queries)
     if len(queries) == 0:
         await event_emitter(
             {
@@ -531,7 +563,6 @@ async def chat_web_search_handler(
         )
 
     return form_data
-
 
 async def chat_image_generation_handler(
     request: Request, form_data: dict, extra_params: dict, user
