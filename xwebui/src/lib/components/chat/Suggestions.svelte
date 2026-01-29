@@ -26,7 +26,7 @@
 	$: fuse = new Fuse(sortedPrompts, fuseOptions);
 
 	// Update the filteredPrompts if inputValue changes
-	// Only increase version if something wirklich ge√§ndert hat
+	// Only increase version if something wirklich ge‰ndert hat
 	$: getFilteredPrompts(inputValue);
 
 	// Helper function to check if arrays are the same
@@ -69,14 +69,14 @@
 		<Bolt />
 		{$i18n.t('Suggested')}
 	{:else}
-		<!-- Keine Vorschl√§ge -->
+		<!-- Keine Vorschl‰ge -->
 
 		<div
 			class="flex w-full {$settings?.landingPageMode === 'chat'
 				? ' -mt-1'
 				: 'text-center items-center justify-center'}  self-start text-gray-600 dark:text-gray-400"
 		>
-			{$WEBUI_NAME} ‚Äß v{WEBUI_VERSION}
+			{$WEBUI_NAME} ? v{WEBUI_VERSION}
 		</div>
 	{/if}
 </div>
@@ -90,9 +90,13 @@
 					role="listitem"
 					class="waterfall flex flex-col flex-1 shrink-0 w-full justify-between
 				       px-3 py-2 rounded-xl bg-transparent hover:bg-black/5
-				       dark:hover:bg-white/5 transition group"
+				       dark:hover:bg-white/5 transition group cursor-default"
 					style="animation-delay: {idx * 60}ms"
-					on:click={() => onSelect({ type: 'prompt', data: prompt.content })}
+					on:click={(e) => {
+						e.preventDefault();
+						e.stopPropagation();
+						// Do nothing - suggestions are informational only
+					}}
 				>
 					<div class="flex flex-col text-left">
 						{#if prompt.title && prompt.title[0] !== ''}
