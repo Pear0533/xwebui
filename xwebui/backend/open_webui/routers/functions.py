@@ -1,10 +1,11 @@
 import os
 import re
+import ast
 
 import logging
 import aiohttp
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from open_webui.models.functions import (
     FunctionForm,
@@ -23,11 +24,115 @@ from open_webui.constants import ERROR_MESSAGES
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.env import SRC_LOG_LEVELS
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, Field
 
 
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MAIN"])
+
+
+############################
+# Pipe Argument Models
+############################
+
+
+class PipeArgument(BaseModel):
+    name: str
+    type: str = "string"  # string, number, boolean, select
+    description: str = ""
+    default: Optional[str] = None
+    options: Optional[List[str]] = None  # For select type
+    required: bool = False
+    prefix: str = "—"  # The prefix used in prompts (e.g., "—" for "—strength")
+
+
+class PipeArgumentsSpec(BaseModel):
+    arguments: List[PipeArgument] = []
+    description: str = ""
+
+
+def extract_pipe_arguments_from_code(code: str) -> PipeArgumentsSpec:
+    """
+    Extract pipe arguments from Python code by analyzing regex patterns
+    that look for flags in the prompt text.
+    
+    This function looks for patterns like:
+    - re.search(r"—flag\\b", prompt, ...)
+    - re.search(r"—flag[=\\s]+(\\d+)", prompt, ...)
+    - re.sub(r"—flag\\b", "", prompt, ...)
+    """
+    arguments = []
+    seen_args = set()
+    
+    # Pattern to find regex searches for flags with em-dash (—) or double-dash (--)
+    # Matches: re.search(r"—flag\b", ...) or re.search(r"--flag\b", ...)
+    flag_patterns = [
+        # Em-dash flags: —flag or —flag[=\s]+value
+        r're\.search\s*\(\s*r["\']—(\w+)(?:\\b|\[=\\s\]\+\(\\d\+\)|\[=\\s\]\+\(\[^\\s\]\+\))',
+        r're\.sub\s*\(\s*r["\']—(\w+)',
+        # Double-dash flags: --flag or --flag[=\s]+value
+        r're\.search\s*\(\s*r["\']--(\w+)(?:\\b|\[=\\s\]\+\(\\d\+\)|\[=\\s\]\+\(\[^\\s\]\+\))',
+        r're\.sub\s*\(\s*r["\']--(\w+)',
+    ]
+    
+    for pattern in flag_patterns:
+        matches = re.finditer(pattern, code, re.IGNORECASE)
+        for match in matches:
+            arg_name = match.group(1).lower()
+            if arg_name not in seen_args:
+                seen_args.add(arg_name)
+                
+                # Try to determine the type by looking at the full pattern
+                full_match = match.group(0)
+                
+                # Check if it captures a number
+                if r'\d+' in full_match or 'int(' in code[match.start():match.start()+200]:
+                    arg_type = "number"
+                # Check if it's a simple boolean flag (just \b, no value capture)
+                elif r'\b' in full_match and '[=' not in full_match:
+                    arg_type = "boolean"
+                else:
+                    arg_type = "string"
+                
+                # Determine prefix used
+                prefix = "—" if "—" in full_match else "--"
+                
+                arguments.append(PipeArgument(
+                    name=arg_name,
+                    type=arg_type,
+                    description=f"Set {arg_name} parameter",
+                    prefix=prefix,
+                ))
+    
+    # Also look for PIPE_ARGUMENTS definition in the code (explicit spec)
+    pipe_args_match = re.search(
+        r'PIPE_ARGUMENTS\s*=\s*(\[[\s\S]*?\])\s*(?:\n\n|\nclass|\ndef|\Z)',
+        code
+    )
+    if pipe_args_match:
+        try:
+            # Try to safely evaluate the list
+            args_str = pipe_args_match.group(1)
+            # Use ast.literal_eval for safety
+            explicit_args = ast.literal_eval(args_str)
+            for arg in explicit_args:
+                if isinstance(arg, dict) and 'name' in arg:
+                    arg_name = arg['name'].lower()
+                    if arg_name not in seen_args:
+                        seen_args.add(arg_name)
+                        arguments.append(PipeArgument(
+                            name=arg_name,
+                            type=arg.get('type', 'string'),
+                            description=arg.get('description', ''),
+                            default=arg.get('default'),
+                            options=arg.get('options'),
+                            required=arg.get('required', False),
+                            prefix=arg.get('prefix', '—'),
+                        ))
+        except Exception as e:
+            log.warning(f"Failed to parse PIPE_ARGUMENTS: {e}")
+    
+    return PipeArgumentsSpec(arguments=arguments)
 
 
 router = APIRouter()
@@ -536,4 +641,97 @@ async def update_function_user_valves_by_id(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
+
+############################
+# GetPipeArguments
+############################
+
+
+@router.get("/id/{id}/arguments", response_model=PipeArgumentsSpec)
+async def get_pipe_arguments_by_id(
+    request: Request, id: str, user=Depends(get_verified_user)
+):
+    """
+    Extract available arguments from a pipe function's code.
+    This analyzes the Python code to find flag patterns that users can specify
+    in their prompts (e.g., —v1, —strength=8).
+    """
+    function = Functions.get_function_by_id(id)
+    if not function:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+    
+    if function.type != "pipe":
+        return PipeArgumentsSpec(arguments=[], description="Not a pipe function")
+    
+    try:
+        # Extract arguments from the function's code
+        arguments_spec = extract_pipe_arguments_from_code(function.content)
+        
+        # Also check if the function module has explicit PIPE_ARGUMENTS attribute
+        try:
+            function_module, function_type, frontmatter = get_function_module_from_cache(
+                request, id
+            )
+            if hasattr(function_module, "PIPE_ARGUMENTS"):
+                explicit_args = function_module.PIPE_ARGUMENTS
+                if isinstance(explicit_args, list):
+                    seen = {arg.name for arg in arguments_spec.arguments}
+                    for arg in explicit_args:
+                        if isinstance(arg, dict) and arg.get('name') not in seen:
+                            arguments_spec.arguments.append(PipeArgument(**arg))
+        except Exception as e:
+            log.warning(f"Could not load function module for arguments: {e}")
+        
+        return arguments_spec
+    except Exception as e:
+        log.exception(f"Error extracting pipe arguments for {id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error extracting arguments: {str(e)}",
+        )
+
+
+class UpdatePipeArgumentsForm(BaseModel):
+    arguments: List[PipeArgument] = []
+
+
+@router.post("/id/{id}/arguments/update", response_model=PipeArgumentsSpec)
+async def update_pipe_arguments_by_id(
+    request: Request, id: str, form_data: UpdatePipeArgumentsForm, user=Depends(get_admin_user)
+):
+    """
+    Update/override the pipe arguments for a function.
+    This stores the arguments in the function's metadata.
+    """
+    function = Functions.get_function_by_id(id)
+    if not function:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+    
+    if function.type != "pipe":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Not a pipe function",
+        )
+    
+    try:
+        # Store arguments in function metadata
+        meta = function.meta.model_dump() if hasattr(function.meta, 'model_dump') else dict(function.meta)
+        meta['pipe_arguments'] = [arg.model_dump() for arg in form_data.arguments]
+        
+        Functions.update_function_metadata_by_id(id, meta)
+        
+        return PipeArgumentsSpec(arguments=form_data.arguments)
+    except Exception as e:
+        log.exception(f"Error updating pipe arguments for {id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error updating arguments: {str(e)}",
         )

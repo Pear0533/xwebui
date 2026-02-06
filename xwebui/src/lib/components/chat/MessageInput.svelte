@@ -79,6 +79,10 @@
 	import { getSuggestionRenderer } from '../common/RichTextInput/suggestions';
 	import CommandSuggestionList from './MessageInput/CommandSuggestionList.svelte';
 
+	import PipeArgumentChip from './MessageInput/PipeArgumentChip.svelte';
+	import PipeArgumentsPanel from './MessageInput/PipeArgumentsPanel.svelte';
+	import type { PipeArgument } from '$lib/apis/functions';
+
 	const i18n = getContext('i18n');
 
 	export let onChange: Function = () => {};
@@ -106,6 +110,73 @@
 	export let imageGenerationEnabled = false;
 	export let webSearchEnabled = false;
 	export let codeInterpreterEnabled = false;
+
+	// Pipe Arguments State
+	let pipeArguments: Map<string, { argument: PipeArgument; value: string }> = new Map();
+	let showPipeArgumentsPanel = true;
+
+	// Convert active pipe arguments to a Map for the panel
+	$: activePipeArgumentNames = new Map(
+		Array.from(pipeArguments.entries()).map(([name, data]) => [name, data.value])
+	);
+
+	// Function to add a pipe argument
+	function addPipeArgument(argument: PipeArgument, value: string = '') {
+		pipeArguments.set(argument.name, { argument, value });
+		pipeArguments = pipeArguments; // Trigger reactivity
+	}
+
+	// Function to remove a pipe argument
+	function removePipeArgument(name: string) {
+		pipeArguments.delete(name);
+		pipeArguments = pipeArguments; // Trigger reactivity
+	}
+
+	// Function to update a pipe argument value
+	function updatePipeArgumentValue(name: string, value: string) {
+		const existing = pipeArguments.get(name);
+		if (existing) {
+			existing.value = value;
+			pipeArguments = pipeArguments; // Trigger reactivity
+		}
+	}
+
+	// Convert pipe arguments to prompt text (e.g., "—v1 —strength=8")
+	function pipeArgumentsToText(): string {
+		const parts: string[] = [];
+		for (const [name, data] of pipeArguments) {
+			const prefix = data.argument.prefix || '—';
+			if (data.argument.type === 'boolean') {
+				// Boolean flags are just the flag name
+				parts.push(`${prefix}${name}`);
+			} else if (data.value) {
+				// Other types include the value
+				parts.push(`${prefix}${name}=${data.value}`);
+			}
+		}
+		return parts.join(' ');
+	}
+
+	// Clear pipe arguments (called after submit)
+	function clearPipeArguments() {
+		pipeArguments = new Map();
+	}
+
+	// Submit function that appends pipe arguments to the prompt
+	function submitWithPipeArguments() {
+		const argsText = pipeArgumentsToText();
+		let finalPrompt = prompt;
+		
+		// Append pipe arguments to the prompt if there are any
+		if (argsText) {
+			finalPrompt = prompt ? `${prompt} ${argsText}` : argsText;
+		}
+		
+		dispatch('submit', finalPrompt);
+		
+		// Clear pipe arguments after submit
+		clearPipeArguments();
+	}
 
 	let showInputVariablesModal = false;
 	let inputVariablesModalCallback = (variableValues) => {};
@@ -1017,7 +1088,7 @@
 								document.getElementById('chat-input')?.focus();
 
 								if ($settings?.speechAutoSend ?? false) {
-									dispatch('submit', prompt);
+									submitWithPipeArguments();
 								}
 							}}
 						/>
@@ -1026,7 +1097,7 @@
 							class="w-full flex flex-col gap-1.5"
 							on:submit|preventDefault={() => {
 								// check if selectedModels support image input
-								dispatch('submit', prompt);
+								submitWithPipeArguments();
 							}}
 						>
 							<div
@@ -1154,6 +1225,21 @@
 													}}
 												/>
 											{/if}
+										{/each}
+									</div>
+								{/if}
+
+								<!-- Active Pipe Arguments Display -->
+								{#if pipeArguments.size > 0}
+									<div class="mx-2 mt-2 pb-1 flex items-center flex-wrap gap-1.5">
+										{#each Array.from(pipeArguments.entries()) as [name, data] (name)}
+											<PipeArgumentChip
+												argument={data.argument}
+												value={data.value}
+												removable={true}
+												on:change={(e) => updatePipeArgumentValue(e.detail.name, e.detail.value)}
+												on:remove={(e) => removePipeArgument(e.detail.name)}
+											/>
 										{/each}
 									</div>
 								{/if}
@@ -1292,8 +1378,8 @@
 
 																	if (enterPressed) {
 																		e.preventDefault();
-																		if (prompt !== '' || files.length > 0) {
-																			dispatch('submit', prompt);
+																		if (prompt !== '' || files.length > 0 || pipeArguments.size > 0) {
+																			submitWithPipeArguments();
 																		}
 																	}
 																}
@@ -1768,6 +1854,16 @@
 							{:else}
 								<div class="mb-1" />
 							{/if}
+
+							<!-- Pipe Arguments Panel -->
+							<PipeArgumentsPanel
+								selectedModels={atSelectedModel ? [atSelectedModel.id] : selectedModels}
+								activeArguments={activePipeArgumentNames}
+								show={showPipeArgumentsPanel}
+								on:add={(e) => {
+									addPipeArgument(e.detail.argument, e.detail.value);
+								}}
+							/>
 						</form>
 					{/if}
 				</div>
