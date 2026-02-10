@@ -174,6 +174,57 @@ def extract_pipe_arguments_from_code(code: str) -> PipeArgumentsSpec:
                     prefix=prefix,
                 ))
 
+    # ── Strategy 4: Alternation-group flags ────────────────────────────
+    # Detects patterns where prefix and flag names are in non-capturing groups:
+    #   re.search(r"(?:--|—|–)(?:aspect_ratio|ar)\s+(\d+:\d+)", ...)
+    #   re.sub(r"(?:--|—|–)(?:resolution|res)\s+\w+", ...)
+    # Extracts each alternation member as a separate argument, using the
+    # first (longest) name as the primary and shorter ones as aliases.
+    alternation_pattern = re.compile(
+        r're\.(?:search|sub|findall)\s*\(\s*r["\']'   # re.search(r" ...
+        r'\(\?:[^)]*(?:--|\u2014|\u2013)[^)]*\)'      # (?:--|—|–) prefix group
+        r'\(\?:(\w+(?:\|\w+)*)\)'                      # (?:flag1|flag2) name group → capture
+        r'([^"\']*)["\']',                             # rest of regex string until quote
+        re.IGNORECASE,
+    )
+    for m in alternation_pattern.finditer(code):
+        names_str = m.group(1)       # e.g. "aspect_ratio|ar"
+        rest_of_regex = m.group(2)   # e.g. "\s+(\d+:\d+)"
+        names = [n.lower() for n in names_str.split('|')]
+
+        # Use the longest name as the primary (e.g. "aspect_ratio" not "ar")
+        primary_name = max(names, key=len)
+
+        if primary_name not in seen_args:
+            # Mark all aliases as seen too
+            for n in names:
+                seen_args.add(n)
+
+            # Infer type from the rest of the regex
+            if r'\d+:\d+' in rest_of_regex:
+                # Ratio pattern like 16:9 — this is a string, not a number
+                arg_type = "string"
+            elif r'\d+' in rest_of_regex and ':' not in rest_of_regex:
+                arg_type = "number"
+            elif r'\w+' in rest_of_regex or r'[^\s]+' in rest_of_regex:
+                arg_type = "string"
+            else:
+                arg_type = "string"
+
+            # Build description from the primary name
+            desc = primary_name.replace('_', ' ').title()
+            # Add aliases to description if present
+            aliases = [n for n in names if n != primary_name]
+            if aliases:
+                desc += f" (alias: {', '.join(aliases)})"
+
+            arguments.append(PipeArgument(
+                name=primary_name,
+                type=arg_type,
+                description=desc,
+                prefix="—",
+            ))
+
     return PipeArgumentsSpec(arguments=arguments)
 
 
