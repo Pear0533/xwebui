@@ -146,11 +146,12 @@
 		const parts: string[] = [];
 		for (const [name, data] of pipeArguments) {
 			const prefix = data.argument.prefix || '—';
-			if (data.argument.type === 'boolean') {
-				// Boolean flags are just the flag name
+			if (data.argument.type === 'boolean' || !data.value) {
+				// Boolean flags or arguments with no value → bare flag name
+				// (user explicitly clicked the flag, so include it even without a value)
 				parts.push(`${prefix}${name}`);
-			} else if (data.value) {
-				// Other types use space separator (pipe regexes match with \s+)
+			} else {
+				// Arguments with a value use space separator (pipe regexes match with \s+)
 				parts.push(`${prefix}${name} ${data.value}`);
 			}
 		}

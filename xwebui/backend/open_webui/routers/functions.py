@@ -145,25 +145,40 @@ def extract_pipe_arguments_from_code(code: str) -> PipeArgumentsSpec:
             if arg_name not in seen_args:
                 seen_args.add(arg_name)
 
-                # Look ahead ~300 chars to infer the type
-                lookahead = code[match.start():match.start() + 300]
                 full_match = match.group(0)
 
-                # Number: regex captures digits, or nearby int()/float() cast
-                if (r'\d+' in lookahead or r'[\d.]+' in lookahead
-                        or 'int(' in lookahead or 'float(' in lookahead):
+                # Extract just the rest of the SAME regex string after the flag name.
+                # Find the closing quote of the regex string to avoid bleed from
+                # other nearby patterns that would cause mis-classification.
+                after_flag = code[match.end():]
+                # Find the closing quote that ends this r"..." string
+                close_quote = after_flag.find('"')
+                close_squote = after_flag.find("'")
+                if close_quote == -1:
+                    close_quote = 9999
+                if close_squote == -1:
+                    close_squote = 9999
+                end_idx = min(close_quote, close_squote)
+                same_regex_rest = after_flag[:end_idx] if end_idx < 9999 else after_flag[:80]
+
+                # Also look at the line context for int()/float() casts
+                line_context = code[match.start():match.start() + 300]
+
+                # Boolean: no value capture after the flag — regex ends right
+                # after the name, or only has \b / boundary / quote
+                if re.match(r'^(?:\\b)?$', same_regex_rest.strip()):
+                    arg_type = "boolean"
+                # Number: regex captures digits WITHIN the same regex string,
+                # or there's an int()/float() cast on the same line
+                elif (r'\d+' in same_regex_rest or r'[\d.]+' in same_regex_rest):
                     arg_type = "number"
-                # Boolean: no value capture group at all — just the bare flag
-                elif re.search(
-                    r're\.(?:search|sub|findall)\s*\(\s*r["\'](?:—|--)' + re.escape(arg_name) + r'["\']',
-                    code, re.IGNORECASE,
-                ):
-                    # The regex string ends right after the flag name → boolean
-                    arg_type = "boolean"
-                elif r'\b' in full_match and '(' not in lookahead.split('\n')[0].split(arg_name, 1)[-1][:20]:
-                    arg_type = "boolean"
-                else:
+                elif ('int(' in line_context.split('\n')[0] or 'float(' in line_context.split('\n')[0]):
+                    arg_type = "number"
+                elif r'\w+' in same_regex_rest or r'[^\s]+' in same_regex_rest:
                     arg_type = "string"
+                else:
+                    # Nothing meaningful after the flag name → boolean
+                    arg_type = "boolean"
 
                 prefix = "—" if "—" in full_match else "--"
 
@@ -174,52 +189,80 @@ def extract_pipe_arguments_from_code(code: str) -> PipeArgumentsSpec:
                     prefix=prefix,
                 ))
 
-    # ── Strategy 4: Alternation-group flags ────────────────────────────
-    # Detects patterns where prefix and flag names are in non-capturing groups:
+    # ── Strategy 4: Flags with prefix in a non-capturing group ─────────
+    # Detects two sub-patterns where the dash prefix is wrapped in (?:...) :
+    #
+    # 4a – Alternation name group:
     #   re.search(r"(?:--|—|–)(?:aspect_ratio|ar)\s+(\d+:\d+)", ...)
-    #   re.sub(r"(?:--|—|–)(?:resolution|res)\s+\w+", ...)
-    # Extracts each alternation member as a separate argument, using the
-    # first (longest) name as the primary and shorter ones as aliases.
+    #
+    # 4b – Bare flag name (no alternation group):
+    #   re.search(r"(?:--|—|–)size\s+(\d+)[x×](\d+)", ...)
+
+    def _infer_type_from_rest(rest: str) -> str:
+        """Infer argument type from the portion of regex after the flag name."""
+        if r'\d+:\d+' in rest:
+            return "string"       # ratio like 16:9
+        elif r'[x\xd7]' in rest or '[x×]' in rest:
+            return "string"       # dimension like 1024x768
+        elif r'\d+' in rest and ':' not in rest:
+            return "number"
+        elif r'\w+' in rest or r'[^\s]+' in rest:
+            return "string"
+        return "string"
+
+    # Prefix group sub-pattern (reused by both 4a and 4b)
+    prefix_group = r'\(\?:[^)]*(?:--|\u2014|\u2013)[^)]*\)'
+
+    # 4a: prefix group + alternation name group  (?:name1|name2)
     alternation_pattern = re.compile(
-        r're\.(?:search|sub|findall)\s*\(\s*r["\']'   # re.search(r" ...
-        r'\(\?:[^)]*(?:--|\u2014|\u2013)[^)]*\)'      # (?:--|—|–) prefix group
-        r'\(\?:(\w+(?:\|\w+)*)\)'                      # (?:flag1|flag2) name group → capture
-        r'([^"\']*)["\']',                             # rest of regex string until quote
+        r're\.(?:search|sub|findall)\s*\(\s*r["\']'
+        + prefix_group +
+        r'\(\?:(\w+(?:\|\w+)*)\)'       # (?:flag1|flag2) → capture
+        r'([^"\']*)["\']',              # rest of regex string
         re.IGNORECASE,
     )
     for m in alternation_pattern.finditer(code):
-        names_str = m.group(1)       # e.g. "aspect_ratio|ar"
-        rest_of_regex = m.group(2)   # e.g. "\s+(\d+:\d+)"
+        names_str = m.group(1)
+        rest_of_regex = m.group(2)
         names = [n.lower() for n in names_str.split('|')]
-
-        # Use the longest name as the primary (e.g. "aspect_ratio" not "ar")
         primary_name = max(names, key=len)
 
         if primary_name not in seen_args:
-            # Mark all aliases as seen too
             for n in names:
                 seen_args.add(n)
 
-            # Infer type from the rest of the regex
-            if r'\d+:\d+' in rest_of_regex:
-                # Ratio pattern like 16:9 — this is a string, not a number
-                arg_type = "string"
-            elif r'\d+' in rest_of_regex and ':' not in rest_of_regex:
-                arg_type = "number"
-            elif r'\w+' in rest_of_regex or r'[^\s]+' in rest_of_regex:
-                arg_type = "string"
-            else:
-                arg_type = "string"
-
-            # Build description from the primary name
+            arg_type = _infer_type_from_rest(rest_of_regex)
             desc = primary_name.replace('_', ' ').title()
-            # Add aliases to description if present
             aliases = [n for n in names if n != primary_name]
             if aliases:
                 desc += f" (alias: {', '.join(aliases)})"
 
             arguments.append(PipeArgument(
                 name=primary_name,
+                type=arg_type,
+                description=desc,
+                prefix="—",
+            ))
+
+    # 4b: prefix group + bare flag name (no alternation group)
+    bare_flag_pattern = re.compile(
+        r're\.(?:search|sub|findall)\s*\(\s*r["\']'
+        + prefix_group +
+        r'(\w+)'                        # bare flag name → capture
+        r'([^"\']*)["\']',              # rest of regex string
+        re.IGNORECASE,
+    )
+    for m in bare_flag_pattern.finditer(code):
+        flag_name = m.group(1).lower()
+        rest_of_regex = m.group(2)
+
+        if flag_name not in seen_args:
+            seen_args.add(flag_name)
+            arg_type = _infer_type_from_rest(rest_of_regex)
+            desc = flag_name.replace('_', ' ').title()
+
+            arguments.append(PipeArgument(
+                name=flag_name,
                 type=arg_type,
                 description=desc,
                 prefix="—",
