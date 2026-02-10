@@ -141,7 +141,7 @@
 		}
 	}
 
-	// Convert pipe arguments to prompt text (e.g., "—v1 —strength=8")
+	// Convert pipe arguments to prompt text (e.g., "—v1 —strength 8")
 	function pipeArgumentsToText(): string {
 		const parts: string[] = [];
 		for (const [name, data] of pipeArguments) {
@@ -150,8 +150,8 @@
 				// Boolean flags are just the flag name
 				parts.push(`${prefix}${name}`);
 			} else if (data.value) {
-				// Other types include the value
-				parts.push(`${prefix}${name}=${data.value}`);
+				// Other types use space separator (pipe regexes match with \s+)
+				parts.push(`${prefix}${name} ${data.value}`);
 			}
 		}
 		return parts.join(' ');

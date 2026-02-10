@@ -56,7 +56,7 @@
 	</Tooltip>
 
 	{#if !isBoolean}
-		<span class="text-blue-400 dark:text-blue-500 mx-0.5">=</span>
+		<span class="text-blue-400 dark:text-blue-500 mx-0.5"></span>
 
 		<!-- Value Input -->
 		{#if isSelect}

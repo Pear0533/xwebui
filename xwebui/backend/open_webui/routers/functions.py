@@ -55,65 +55,23 @@ def extract_pipe_arguments_from_code(code: str) -> PipeArgumentsSpec:
     """
     Extract pipe arguments from Python code by analyzing regex patterns
     that look for flags in the prompt text.
-    
-    This function looks for patterns like:
-    - re.search(r"—flag\\b", prompt, ...)
-    - re.search(r"—flag[=\\s]+(\\d+)", prompt, ...)
-    - re.sub(r"—flag\\b", "", prompt, ...)
+
+    Detection strategies (in order):
+    1. Explicit PIPE_ARGUMENTS list constant in module scope
+    2. Dict-based param_patterns like {"duration": (r"—duration\\s+(\\d+)", int), ...}
+    3. Individual re.search / re.sub calls with em-dash (—) or double-dash (--) flags
     """
     arguments = []
     seen_args = set()
-    
-    # Pattern to find regex searches for flags with em-dash (—) or double-dash (--)
-    # Matches: re.search(r"—flag\b", ...) or re.search(r"--flag\b", ...)
-    flag_patterns = [
-        # Em-dash flags: —flag or —flag[=\s]+value
-        r're\.search\s*\(\s*r["\']—(\w+)(?:\\b|\[=\\s\]\+\(\\d\+\)|\[=\\s\]\+\(\[^\\s\]\+\))',
-        r're\.sub\s*\(\s*r["\']—(\w+)',
-        # Double-dash flags: --flag or --flag[=\s]+value
-        r're\.search\s*\(\s*r["\']--(\w+)(?:\\b|\[=\\s\]\+\(\\d\+\)|\[=\\s\]\+\(\[^\\s\]\+\))',
-        r're\.sub\s*\(\s*r["\']--(\w+)',
-    ]
-    
-    for pattern in flag_patterns:
-        matches = re.finditer(pattern, code, re.IGNORECASE)
-        for match in matches:
-            arg_name = match.group(1).lower()
-            if arg_name not in seen_args:
-                seen_args.add(arg_name)
-                
-                # Try to determine the type by looking at the full pattern
-                full_match = match.group(0)
-                
-                # Check if it captures a number
-                if r'\d+' in full_match or 'int(' in code[match.start():match.start()+200]:
-                    arg_type = "number"
-                # Check if it's a simple boolean flag (just \b, no value capture)
-                elif r'\b' in full_match and '[=' not in full_match:
-                    arg_type = "boolean"
-                else:
-                    arg_type = "string"
-                
-                # Determine prefix used
-                prefix = "—" if "—" in full_match else "--"
-                
-                arguments.append(PipeArgument(
-                    name=arg_name,
-                    type=arg_type,
-                    description=f"Set {arg_name} parameter",
-                    prefix=prefix,
-                ))
-    
-    # Also look for PIPE_ARGUMENTS definition in the code (explicit spec)
+
+    # ── Strategy 1: Explicit PIPE_ARGUMENTS constant ───────────────────
     pipe_args_match = re.search(
         r'PIPE_ARGUMENTS\s*=\s*(\[[\s\S]*?\])\s*(?:\n\n|\nclass|\ndef|\Z)',
         code
     )
     if pipe_args_match:
         try:
-            # Try to safely evaluate the list
             args_str = pipe_args_match.group(1)
-            # Use ast.literal_eval for safety
             explicit_args = ast.literal_eval(args_str)
             for arg in explicit_args:
                 if isinstance(arg, dict) and 'name' in arg:
@@ -131,7 +89,91 @@ def extract_pipe_arguments_from_code(code: str) -> PipeArgumentsSpec:
                         ))
         except Exception as e:
             log.warning(f"Failed to parse PIPE_ARGUMENTS: {e}")
-    
+
+    # ── Strategy 2: Dict-based param_patterns ──────────────────────────
+    # Detects patterns like:
+    #   param_patterns = {
+    #       "duration": (r"—duration\s+(\d+)", int),
+    #       "sampler_name": (r"—sampler\s+(\w+)", str),
+    #   }
+    # or individual lines:  "duration": (r"—duration\s+(\d+)", int),
+    dict_entry_pattern = re.compile(
+        r'["\'](\w+)["\']\s*:\s*\(\s*r["\']'      # "param_name": (r"
+        r'(?:—|--)(\w+)'                            # —flag or --flag
+        r'[^"\']*["\']'                             # rest of regex string
+        r'\s*,\s*(\w+)\s*\)',                       # , type)
+        re.IGNORECASE,
+    )
+    for m in dict_entry_pattern.finditer(code):
+        dict_key = m.group(1).lower()           # dict key is the internal param name
+        flag_name = m.group(2).lower()          # regex flag is what the user types
+        converter = m.group(3).lower()          # int / float / str
+        if flag_name not in seen_args:
+            seen_args.add(flag_name)
+            # Also mark the dict key as seen to avoid duplicates from Strategy 3
+            seen_args.add(dict_key)
+            if converter in ('int', 'float'):
+                arg_type = "number"
+            else:
+                arg_type = "string"
+            # Use a friendlier description derived from the dict key
+            desc = dict_key.replace('_', ' ').title() if dict_key != flag_name else f"Set {flag_name} parameter"
+            arguments.append(PipeArgument(
+                name=flag_name,
+                type=arg_type,
+                description=desc,
+                prefix="—",
+            ))
+
+    # ── Strategy 3: Individual re.search / re.sub calls ────────────────
+    # Broad pattern that catches any re.search(r"—flag..." or re.sub(r"—flag..."
+    # regardless of what follows the flag name in the regex string.
+    flag_patterns = [
+        # Em-dash (—) variants
+        r're\.search\s*\(\s*r["\']—(\w+)',
+        r're\.sub\s*\(\s*r["\']—(\w+)',
+        r're\.findall\s*\(\s*r["\']—(\w+)',
+        # Double-dash (--) variants
+        r're\.search\s*\(\s*r["\']--(\w+)',
+        r're\.sub\s*\(\s*r["\']--(\w+)',
+        r're\.findall\s*\(\s*r["\']--(\w+)',
+    ]
+
+    for pattern in flag_patterns:
+        for match in re.finditer(pattern, code, re.IGNORECASE):
+            arg_name = match.group(1).lower()
+            if arg_name not in seen_args:
+                seen_args.add(arg_name)
+
+                # Look ahead ~300 chars to infer the type
+                lookahead = code[match.start():match.start() + 300]
+                full_match = match.group(0)
+
+                # Number: regex captures digits, or nearby int()/float() cast
+                if (r'\d+' in lookahead or r'[\d.]+' in lookahead
+                        or 'int(' in lookahead or 'float(' in lookahead):
+                    arg_type = "number"
+                # Boolean: no value capture group at all — just the bare flag
+                elif re.search(
+                    r're\.(?:search|sub|findall)\s*\(\s*r["\'](?:—|--)' + re.escape(arg_name) + r'["\']',
+                    code, re.IGNORECASE,
+                ):
+                    # The regex string ends right after the flag name → boolean
+                    arg_type = "boolean"
+                elif r'\b' in full_match and '(' not in lookahead.split('\n')[0].split(arg_name, 1)[-1][:20]:
+                    arg_type = "boolean"
+                else:
+                    arg_type = "string"
+
+                prefix = "—" if "—" in full_match else "--"
+
+                arguments.append(PipeArgument(
+                    name=arg_name,
+                    type=arg_type,
+                    description=f"Set {arg_name} parameter",
+                    prefix=prefix,
+                ))
+
     return PipeArgumentsSpec(arguments=arguments)
 
 
@@ -669,6 +711,12 @@ async def get_pipe_arguments_by_id(
         return PipeArgumentsSpec(arguments=[], description="Not a pipe function")
     
     try:
+        # First check if there are explicitly stored arguments in metadata
+        meta = function.meta.model_dump() if hasattr(function.meta, 'model_dump') else dict(function.meta) if function.meta else {}
+        if meta.get('pipe_arguments'):
+            stored_args = [PipeArgument(**arg) for arg in meta['pipe_arguments']]
+            return PipeArgumentsSpec(arguments=stored_args)
+
         # Extract arguments from the function's code
         arguments_spec = extract_pipe_arguments_from_code(function.content)
         
