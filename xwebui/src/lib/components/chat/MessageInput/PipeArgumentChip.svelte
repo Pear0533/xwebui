@@ -77,6 +77,21 @@
 					<option value={option}>{option}</option>
 				{/each}
 			</select>
+		{:else if isNumber}
+			<input
+				bind:this={inputElement}
+				bind:value
+				on:input={handleValueChange}
+				on:focus={() => (isFocused = true)}
+				on:blur={() => (isFocused = false)}
+				type="number"
+				placeholder={argument.default || '0'}
+				class="bg-transparent border-none outline-none text-blue-800 dark:text-blue-100
+					w-[60px] min-w-[40px] max-w-[100px] text-sm
+					placeholder:text-blue-400 dark:placeholder:text-blue-600
+					focus:ring-0"
+				style="width: {Math.max(40, Math.min(100, (value?.length || 3) * 8 + 16))}px"
+			/>
 		{:else}
 			<input
 				bind:this={inputElement}
@@ -84,8 +99,8 @@
 				on:input={handleValueChange}
 				on:focus={() => (isFocused = true)}
 				on:blur={() => (isFocused = false)}
-				type={isNumber ? 'number' : 'text'}
-				placeholder={argument.default || (isNumber ? '0' : '...')}
+				type="text"
+				placeholder={argument.default || '...'}
 				class="bg-transparent border-none outline-none text-blue-800 dark:text-blue-100
 					w-[60px] min-w-[40px] max-w-[100px] text-sm
 					placeholder:text-blue-400 dark:placeholder:text-blue-600
